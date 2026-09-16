@@ -119,11 +119,16 @@ def loc_query(owner_affiliation, comment_size=0, force_cache=False, cursor=None,
     }'''
     variables = {'owner_affiliation': owner_affiliation, 'login': USER_NAME, 'cursor': cursor}
     request = simple_request(loc_query.__name__, query, variables)
+    new_edges = request.json()['data']['user']['repositories']['edges']
+    # Drop any repo GitHub returned a null node for -- the token can't fully
+    # see it (commonly: an org-owned repo the token isn't approved for).
+    # Better to undercount that one repo than crash the whole run.
+    new_edges = [e for e in new_edges if e.get('node')]
     if request.json()['data']['user']['repositories']['pageInfo']['hasNextPage']:
-        edges += request.json()['data']['user']['repositories']['edges']
+        edges += new_edges
         return loc_query(owner_affiliation, comment_size, force_cache, request.json()['data']['user']['repositories']['pageInfo']['endCursor'], edges)
     else:
-        return cache_builder(edges + request.json()['data']['user']['repositories']['edges'], comment_size, force_cache)
+        return cache_builder(edges + new_edges, comment_size, force_cache)
 
 
 def cache_builder(edges, comment_size, force_cache, loc_add=0, loc_del=0):
@@ -193,7 +198,13 @@ def force_close_file(data, cache_comment):
 def stars_counter(data):
     total_stars = 0
     for node in data:
-        total_stars += node['node']['stargazers']['totalCount']
+        repo = node.get('node')
+        if not repo:
+            # GitHub returns a null node for a repo the token can't fully see
+            # (commonly: an org-owned repo the token isn't approved for).
+            # Skip it rather than crash the whole run.
+            continue
+        total_stars += repo['stargazers']['totalCount']
     return total_stars
 
 
